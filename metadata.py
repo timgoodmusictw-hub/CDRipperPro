@@ -14,29 +14,18 @@ from ctypes import c_char_p, c_int, c_void_p
 from utils import resource_path
 from config import DISCID_DLL, UA_APP, UA_VER, UA_CONTACT
 
-# --- [設定] 是否啟用除錯日誌 ---
-# True = 發生錯誤時寫入 debug_log.txt
-# False = 忽略錯誤 (正式發布建議設為 False)
-ENABLE_DEBUG_LOG = False
-# -----------------------------
+# 設定是否啟用除錯日誌
+ENABLE_DEBUG_LOG = True 
 
-# 忽略 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 musicbrainzngs.set_useragent(UA_APP, UA_VER, UA_CONTACT)
 
 def get_base_path():
-    """ 取得執行檔所在的真實目錄 """
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    else:
-        return os.path.dirname(os.path.abspath(__file__))
+    if getattr(sys, 'frozen', False): return os.path.dirname(sys.executable)
+    else: return os.path.dirname(os.path.abspath(__file__))
 
 def log_error(msg):
-    """ 將錯誤寫入 debug_log.txt 以便除錯 """
-    # [修改處] 檢查開關變數
     if not ENABLE_DEBUG_LOG: return
-
     log_path = os.path.join(get_base_path(), "debug_log.txt")
     try:
         with open(log_path, "a", encoding="utf-8") as f:
@@ -44,7 +33,7 @@ def log_error(msg):
     except: pass
 
 class DiscIDWrapper:
-    """ MusicBrainz DiscID 讀取器 """
+    """ MusicBrainz DiscID 讀取器 (保持不變) """
     def __init__(self, dll_name=DISCID_DLL):
         self.dll_path = resource_path(os.path.join("tools", dll_name))
         self.lib = None
@@ -61,8 +50,7 @@ class DiscIDWrapper:
             self.lib.discid_get_sectors.argtypes = [c_void_p]; self.lib.discid_get_sectors.restype = c_int
             self.disc = self.lib.discid_new()
         except Exception as e:
-            self.lib = None
-            log_error(f"DiscID Init Error: {e}")
+            self.lib = None; log_error(f"DiscID Init Error: {e}")
 
     def read_drive(self, drive_letter):
         if not self.lib: return False
@@ -86,66 +74,73 @@ class DiscIDWrapper:
         except: return None
 
 class CDDBQueryEngine:
-    """ 通用 CDDB 查詢引擎 """
+    """ [修正] 支援回傳多重結果的查詢引擎 """
     def __init__(self, server_url, name):
-        self.server_url = server_url
-        self.name = name
+        self.server_url = server_url; self.name = name
     
+    def _read_details(self, category, disc_id):
+        """ 內部函式：讀取單一項目的詳細資料 """
+        try:
+            read_cmd = f"cddb read {category} {disc_id}"
+            read_params = {'cmd': read_cmd, 'hello': 'u h c 1.0', 'proto': '6'}
+            read_url = f"{self.server_url}?{urllib.parse.urlencode(read_params)}"
+            resp = requests.get(read_url, timeout=8, verify=False)
+            
+            raw_data = resp.content
+            decoded_text = ""
+            for enc in ['utf-8', 'shift_jis', 'cp1252', 'iso-8859-1', 'gbk']:
+                try: decoded_text = raw_data.decode(enc); break
+                except: continue
+            return self.parse_entry(decoded_text)
+        except:
+            return None
+
     def query(self, disc_data, log_func):
-        if not disc_data: return None
+        """ 回傳一個列表 list[dict] """
+        if not disc_data: return []
         
-        # 建立 CDDB 查詢指令
         cmd_arg = f"cddb query {disc_data['discid']} {disc_data['track_count']} {' '.join(disc_data['offsets'])} {disc_data['seconds']}"
         params = {'cmd': cmd_arg, 'hello': 'user host client 1.0', 'proto': '6'}
         query_url = f"{self.server_url}?{urllib.parse.urlencode(params)}"
         
+        results = []
         try:
             log_func(f"  📡 連線 {self.name}...")
-            resp = requests.get(query_url, timeout=10, verify=False)
+            resp = requests.get(query_url, timeout=5, verify=False)
             content = resp.text
-            
             parts = content.split()
-            if not parts: return None
+            if not parts: return []
             
-            try:
-                code = int(parts[0])
-            except: return None
+            try: code = int(parts[0])
+            except: return []
             
-            cat, disc_id = "", ""
-            
+            # --- Case 1: 精確匹配 (200) ---
             if code == 200: 
                 cat, disc_id = parts[1], parts[2]
-            elif code in (210, 211): 
-                lines = content.strip().split('\n')
-                if len(lines) > 1:
-                    target_parts = lines[1].split()
-                    cat, disc_id = target_parts[0], target_parts[1]
-                else: return None
-            else: 
-                return None
+                if info := self._read_details(cat, disc_id):
+                    results.append(info)
 
-            log_func(f"  📖 {self.name} 讀取: {cat}")
-            
-            # 讀取詳細資料
-            read_cmd = f"cddb read {cat} {disc_id}"
-            read_params = {'cmd': read_cmd, 'hello': 'u h c 1.0', 'proto': '6'}
-            read_url = f"{self.server_url}?{urllib.parse.urlencode(read_params)}"
-            
-            resp_read = requests.get(read_url, timeout=10, verify=False)
-            raw_data = resp_read.content 
-            
-            decoded_text = ""
-            for enc in ['utf-8', 'shift_jis', 'cp1252', 'iso-8859-1', 'gbk']:
-                try: 
-                    decoded_text = raw_data.decode(enc)
-                    break
-                except: continue
-            
-            return self.parse_entry(decoded_text)
-            
+            # --- Case 2: 多重匹配 (210/211) ---
+            elif code in (210, 211):
+                lines = content.strip().split('\n')
+                # lines[0] 是狀態碼，從 lines[1] 開始是匹配項目
+                # 限制最多讀取前 5 筆，避免請求過多導致卡頓
+                matches = lines[1:6] 
+                
+                for line in matches:
+                    try:
+                        # 格式通常是: category discid Artist / Title
+                        m_parts = line.split()
+                        if len(m_parts) >= 2:
+                            cat, disc_id = m_parts[0], m_parts[1]
+                            if info := self._read_details(cat, disc_id):
+                                results.append(info)
+                    except: continue
+
+            return results
         except Exception as e:
             log_error(f"{self.name} Query Error: {e}")
-            return None
+            return []
 
     def parse_entry(self, text):
         info = {"artist": "Unknown", "album": "Unknown", "year": time.strftime("%Y"), "genre": "Unknown", "tracks": []}
@@ -159,18 +154,16 @@ class CDDBQueryEngine:
             elif line.startswith("DYEAR="): info["year"] = line[6:]
             elif line.startswith("DGENRE="): info["genre"] = line[7:]
             elif line.startswith("TTITLE"):
-                try: 
-                    k, v = line.split("=", 1); track_idx = int(k.replace("TTITLE", ""))
-                    track_titles[track_idx] = v
+                try: k, v = line.split("=", 1); track_idx = int(k.replace("TTITLE", "")); track_titles[track_idx] = v
                 except: pass
         for i in sorted(track_titles.keys()):
             info["tracks"].append({"num": str(i + 1), "title": track_titles[i], "artist": info["artist"]})
         return info
 
 class NativeCDReader:
+    """ CD-Text 讀取 (保持不變) """
     @staticmethod
     def get_cd_info(drive_letter):
-        # 維持不變
         ps = f"""
         $ErrorActionPreference='SilentlyContinue'; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8
         $wmp=New-Object -ComObject WMPlayer.OCX; $drives=$wmp.cdromCollection
@@ -188,7 +181,6 @@ class NativeCDReader:
             res = subprocess.run(["powershell", "-Command", ps], capture_output=True, text=True, encoding='utf-8', creationflags=subprocess.CREATE_NO_WINDOW)
             lines = res.stdout.strip().split('\n')
             if not lines: return None
-            
             info = {"artist": "Various Artists", "album": "Unknown", "year": time.strftime("%Y"), "genre": "Unknown", "tracks": []}
             artists = []; genres = []
             for line in lines:
@@ -275,67 +267,68 @@ class MetadataManager:
             log_error(f"Cover Download Exception: {e}")
         return None
 
-    def fetch(self, drive_letter, use_native_first=False):
+    def fetch_all_candidates(self, drive_letter, use_native_first=False):
+        """ 搜尋所有來源並回傳列表 """
+        candidates = []
+        
         if not self.disc_reader.read_drive(drive_letter):
-            self.log("❌ 無法讀取光碟結構"); return None
+            self.log("❌ 無法讀取光碟結構"); return []
         
         physical_count = self.disc_reader.get_track_count()
         if physical_count == 0: physical_count = 15
 
-        if use_native_first:
-            self.log("💿 讀取 CD-Text...")
-            if info := NativeCDReader.get_cd_info(drive_letter):
-                self.log(f"✅ CD-Text: {info['album']}")
-                info["cover_path"] = None
-                return self._ensure_tracks(info, physical_count)
+        # 1. CD-Text (本機)
+        self.log("💿 正在讀取 CD-Text...")
+        if info := NativeCDReader.get_cd_info(drive_letter):
+            info = self._ensure_tracks(info, physical_count)
+            info["source"] = "CD-Text (Local)"
+            info["cover_path"] = None
+            candidates.append(info)
 
-        self.log("🔍 查詢 MusicBrainz...")
+        # 2. MusicBrainz (保留原本邏輯)
+        self.log("🔍 正在搜尋 MusicBrainz...")
         try:
             if mb_id := self.disc_reader.get_mb_discid():
                 res = musicbrainzngs.get_releases_by_discid(mb_id, includes=["artists", "recordings"])
                 if "disc" in res and "release-list" in res["disc"]:
-                    rel = res["disc"]["release-list"][0]
-                    release_id = rel["id"]
-                    cover_file = self.download_cover(release_id)
-                    
-                    info = {
-                        "artist": rel["artist-credit"][0]["artist"]["name"],
-                        "album": rel.get("title", "Unknown"),
-                        "year": rel.get("date", "0000").split("-")[0],
-                        "genre": "Unknown",
-                        "tracks": [],
-                        "cover_path": cover_file
-                    }
-                    if info["cover_path"]: self.log("  ✅ 封面下載成功")
+                    for i, rel in enumerate(res["disc"]["release-list"][:2]):
+                        release_id = rel["id"]
+                        cover_file = None
+                        if i == 0: cover_file = self.download_cover(release_id)
 
-                    for t in rel["medium-list"][0]["track-list"]:
-                        track_artist = t["recording"].get("artist-credit", [{"artist": {"name": info["artist"]}}])[0]["artist"]["name"]
-                        info["tracks"].append({"num": t["number"], "title": t["recording"]["title"], "artist": track_artist})
-                    
-                    self.log(f"✅ MusicBrainz: {info['album']}")
-                    return self._ensure_tracks(info, physical_count)
+                        info = {
+                            "source": f"MusicBrainz (#{i+1})",
+                            "artist": rel["artist-credit"][0]["artist"]["name"],
+                            "album": rel.get("title", "Unknown"),
+                            "year": rel.get("date", "0000").split("-")[0],
+                            "genre": "Unknown",
+                            "tracks": [],
+                            "cover_path": cover_file,
+                        }
+                        for t in rel["medium-list"][0]["track-list"]:
+                            track_artist = t["recording"].get("artist-credit", [{"artist": {"name": info["artist"]}}])[0]["artist"]["name"]
+                            info["tracks"].append({"num": t["number"], "title": t["recording"]["title"], "artist": track_artist})
+                        candidates.append(self._ensure_tracks(info, physical_count))
         except Exception as e:
-            self.log(f"  ⚠️ MusicBrainz 失敗: {e}")
+            self.log(f"  ⚠️ MusicBrainz 錯誤: {e}")
 
-        self.log("🔍 查詢 CDDB (GnuDB / FreeDB)...")
+        # 3. CDDB (GnuDB / FreeDB) - [修正] 處理回傳的列表
         if disc_data := self.disc_reader.get_freedb_data():
             for source in self.cddb_sources:
-                info = source.query(disc_data, self.log)
+                self.log(f"🔍 搜尋 {source.name}...")
                 
-                if info:
+                # query 現在回傳 list
+                results = source.query(disc_data, self.log)
+                
+                for idx, info in enumerate(results):
                     if info.get("artist") == "Unknown" and info.get("album") == "Unknown":
-                        self.log(f"  ⚠️ {source.name} 資料無效 (Unknown)，嘗試下一來源...")
                         continue
-                        
-                    self.log(f"✅ {source.name}: {info['album']}")
+                    
+                    info = self._ensure_tracks(info, physical_count)
+                    # 標記來源 (例如 GnuDB #1, GnuDB #2)
+                    info["source"] = f"{source.name} (#{idx+1})"
                     info["cover_path"] = None
-                    return self._ensure_tracks(info, physical_count)
+                    candidates.append(info)
 
-        if not use_native_first:
-            self.log("🔄 嘗試 CD-Text...")
-            if info := NativeCDReader.get_cd_info(drive_letter):
-                info["cover_path"] = None
-                return self._ensure_tracks(info, physical_count)
-
-        self.log("⚠️ 無資料"); 
-        return self._ensure_tracks({"artist": "Unknown", "album": "Unknown", "cover_path": None, "tracks": []}, physical_count)
+        self.log(f"✅ 搜尋完成，共找到 {len(candidates)} 筆資料")
+        return candidates

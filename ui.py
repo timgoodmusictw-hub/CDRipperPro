@@ -8,8 +8,64 @@ from config import DEFAULT_OUTPUT_DIR, DISCID_DLL
 from engine import AudioRipperEngine
 from metadata import MetadataManager
 
+class CandidateSelectionDialog(tk.Toplevel):
+    """ [新增] 搜尋結果選擇視窗 """
+    def __init__(self, parent, candidates):
+        super().__init__(parent)
+        self.title("選擇專輯資訊版本")
+        self.geometry("600x400")
+        self.candidates = candidates
+        self.selected_data = None
+        self.setup_ui()
+        self.transient(parent); self.grab_set()
+
+    def setup_ui(self):
+        ttk.Label(self, text="找到多筆資料，請選擇最符合的一個：", padding=10).pack(fill="x")
+        
+        # 建立 Treeview 表格
+        columns = ("source", "artist", "album", "year", "tracks")
+        self.tree = ttk.Treeview(self, columns=columns, show="headings", selectmode="browse")
+        
+        self.tree.heading("source", text="來源")
+        self.tree.heading("artist", text="演出者")
+        self.tree.heading("album", text="專輯名稱")
+        self.tree.heading("year", text="年份")
+        self.tree.heading("tracks", text="軌數")
+        
+        self.tree.column("source", width=120)
+        self.tree.column("artist", width=120)
+        self.tree.column("album", width=180)
+        self.tree.column("year", width=60)
+        self.tree.column("tracks", width=50)
+        
+        # 插入資料
+        for i, c in enumerate(self.candidates):
+            self.tree.insert("", "end", iid=str(i), values=(
+                c.get("source", "Unknown"),
+                c.get("artist", ""),
+                c.get("album", ""),
+                c.get("year", ""),
+                len(c.get("tracks", []))
+            ))
+            
+        self.tree.pack(fill="both", expand=True, padx=10, pady=5)
+        self.tree.bind("<Double-1>", self.on_confirm) # 雙擊選擇
+
+        # 按鈕
+        frame_btn = ttk.Frame(self, padding=10)
+        frame_btn.pack(fill="x")
+        ttk.Button(frame_btn, text="選擇此版本", command=self.on_confirm).pack(side="right", padx=5)
+        ttk.Button(frame_btn, text="取消 / 使用空白模板", command=self.destroy).pack(side="right", padx=5)
+
+    def on_confirm(self, event=None):
+        sel = self.tree.selection()
+        if not sel: return
+        idx = int(sel[0])
+        self.selected_data = self.candidates[idx]
+        self.destroy()
+
 class TrackEditorDialog(tk.Toplevel):
-    """ 專輯資訊編輯視窗 (標題列固定版) """
+    """ 專輯資訊編輯視窗 """
     def __init__(self, parent, metadata):
         super().__init__(parent)
         self.title("編輯專輯資訊")
@@ -20,18 +76,11 @@ class TrackEditorDialog(tk.Toplevel):
         self.transient(parent); self.grab_set()
 
     def setup_ui(self):
-        # 1. 全域資訊
         frame_top = ttk.LabelFrame(self, text="專輯資訊 (全域)", padding=10)
         frame_top.pack(fill="x", padx=10, pady=5)
         
         self.vars = {}
-        fields = [
-            ("專輯演出者 (Album Artist)", "artist"),
-            ("專輯名稱 (Album)", "album"),
-            ("年份 (Year)", "year"),
-            ("流派 (Genre)", "genre")
-        ]
-        
+        fields = [("專輯演出者 (Album Artist)", "artist"), ("專輯名稱 (Album)", "album"), ("年份 (Year)", "year"), ("流派 (Genre)", "genre")]
         for i, (label, key) in enumerate(fields):
             ttk.Label(frame_top, text=label).grid(row=i, column=0, sticky="e", padx=5, pady=2)
             val = self.metadata.get(key, "Unknown")
@@ -39,19 +88,15 @@ class TrackEditorDialog(tk.Toplevel):
             ttk.Entry(frame_top, textvariable=var, width=50).grid(row=i, column=1, sticky="w", padx=5, pady=2)
             self.vars[key] = var
 
-        # 2. 曲目列表外框
-        frame_list = ttk.LabelFrame(self, text="曲目列表 (每首歌可獨立設定演出者)", padding=5)
+        frame_list = ttk.LabelFrame(self, text="曲目列表", padding=5)
         frame_list.pack(fill="both", expand=True, padx=10, pady=5)
 
-        # 建立固定的標題列 (Header)
         header_frame = ttk.Frame(frame_list)
         header_frame.pack(side="top", fill="x", padx=0, pady=2)
-
         ttk.Label(header_frame, text="#", width=4, anchor="center").grid(row=0, column=0, padx=5, sticky="w")
         ttk.Label(header_frame, text="曲目名稱 (Title)", width=38, anchor="w").grid(row=0, column=1, padx=5, sticky="w")
         ttk.Label(header_frame, text="個別演出者 (Artist)", width=28, anchor="w").grid(row=0, column=2, padx=5, sticky="w")
 
-        # 可捲動區域
         canvas = tk.Canvas(frame_list)
         scrollbar = ttk.Scrollbar(frame_list, orient="vertical", command=canvas.yview)
         self.scrollable_frame = ttk.Frame(canvas)
@@ -59,7 +104,6 @@ class TrackEditorDialog(tk.Toplevel):
         self.scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
-
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
@@ -76,41 +120,31 @@ class TrackEditorDialog(tk.Toplevel):
             ttk.Entry(self.scrollable_frame, textvariable=t_artist, width=30).grid(row=row, column=2, padx=5, pady=2)
             self.track_vars.append((t_title, t_artist))
 
-        # 3. 按鈕
         frame_btn = ttk.Frame(self, padding=10)
         frame_btn.pack(fill="x")
         ttk.Button(frame_btn, text="儲存變更", command=self.on_save).pack(side="right", padx=5)
         ttk.Button(frame_btn, text="取消", command=self.destroy).pack(side="right", padx=5)
 
     def on_save(self):
-        # [關鍵修正] 使用 copy() 保留原始資料 (包含 cover_path)，而不是建立新字典
         new_meta = self.metadata.copy()
-        
-        # 更新全域資訊
         new_meta["artist"] = self.vars["artist"].get()
         new_meta["album"] = self.vars["album"].get()
         new_meta["year"] = self.vars["year"].get()
         new_meta["genre"] = self.vars["genre"].get()
-        
-        # 重建曲目列表
         new_tracks = []
         for i, (v_title, v_artist) in enumerate(self.track_vars):
-            # 保留原始曲目的其他潛在資訊，只更新標題與演出者
-            original_track = self.metadata["tracks"][i]
-            updated_track = original_track.copy()
+            updated_track = self.metadata["tracks"][i].copy()
             updated_track["title"] = v_title.get()
             updated_track["artist"] = v_artist.get()
             new_tracks.append(updated_track)
-            
         new_meta["tracks"] = new_tracks
-        
         self.result_data = new_meta
         self.destroy()
 
 class RipperGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Python CD Ripper Pro v2.6 (Album Art)")
+        self.root.title("Python CD Ripper Pro v2.7 (Selector)")
         self.root.geometry("750x700")
         
         self.engine = AudioRipperEngine(self.log_message)
@@ -137,7 +171,7 @@ class RipperGUI:
         self.combo_format = ttk.Combobox(frame_settings, state="readonly", width=8, values=["m4a", "flac", "mp3"]); self.combo_format.current(0); self.combo_format.grid(row=0, column=4)
 
         self.var_use_cdtext = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frame_settings, text="優先使用本機 CD-Text", variable=self.var_use_cdtext).grid(row=1, column=0, columnspan=3, sticky="w", pady=5)
+        ttk.Checkbutton(frame_settings, text="包含本機 CD-Text", variable=self.var_use_cdtext).grid(row=1, column=0, columnspan=3, sticky="w", pady=5)
 
         ttk.Label(frame_settings, text="輸出目錄:").grid(row=2, column=0, sticky="w")
         self.var_output = tk.StringVar(value=DEFAULT_OUTPUT_DIR)
@@ -212,20 +246,46 @@ class RipperGUI:
         self.btn_edit.config(state="disabled"); self.btn_start.config(state="disabled"); self.btn_cover.config(state="disabled")
         
         def task():
-            self.log_message(f"讀取 {drive} ...")
-            meta = self.meta_mgr.fetch(drive, self.var_use_cdtext.get())
-            if not meta:
+            self.log_message(f"讀取 {drive} (搜尋所有來源)...")
+            
+            # [修正] 呼叫 fetch_all_candidates 而不是 fetch
+            candidates = self.meta_mgr.fetch_all_candidates(drive, self.var_use_cdtext.get())
+            
+            # 必須回到主執行緒操作 GUI
+            self.root.after(0, lambda: self.handle_search_results(candidates))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def handle_search_results(self, candidates):
+        meta = None
+        
+        if not candidates:
+            # 沒找到資料 -> 空白模板
+            meta = {
+                "source": "Manual",
+                "artist": "Unknown Artist", "album": "Unknown Album", "year": time.strftime("%Y"), "genre": "Pop", "cover_path": None,
+                "tracks": [{"num": str(i+1), "title": f"Track {i+1:02d}", "artist": "Unknown Artist"} for i in range(15)]
+            }
+            self.log_message("⚠️ 未找到資料，使用空白模板")
+        else:
+            # [修正] 彈出選擇視窗
+            dialog = CandidateSelectionDialog(self.root, candidates)
+            self.root.wait_window(dialog)
+            if dialog.selected_data:
+                meta = dialog.selected_data
+                self.log_message(f"✅ 已選擇來源: {meta.get('source')}")
+            else:
+                # 使用者取消 -> 空白模板
                 meta = {
+                    "source": "Manual",
                     "artist": "Unknown Artist", "album": "Unknown Album", "year": time.strftime("%Y"), "genre": "Pop", "cover_path": None,
                     "tracks": [{"num": str(i+1), "title": f"Track {i+1:02d}", "artist": "Unknown Artist"} for i in range(15)]
                 }
-                self.log_message("⚠️ 建立空白模板")
-            
-            self.current_metadata = meta
-            info_str = f"{meta['artist']} - {meta['album']} [{meta.get('genre','')}]\n{len(meta['tracks'])} Tracks"
-            self.root.after(0, lambda: self.update_ui_after_read(info_str, meta.get("cover_path")))
+                self.log_message("⚠️ 使用者取消選擇，使用空白模板")
 
-        threading.Thread(target=task, daemon=True).start()
+        self.current_metadata = meta
+        info_str = f"{meta['artist']} - {meta['album']} [{meta.get('genre','')}]\n{len(meta['tracks'])} Tracks"
+        self.update_ui_after_read(info_str, meta.get("cover_path"))
 
     def update_ui_after_read(self, info_text, cover_path):
         self.lbl_album_info.config(text=info_text, foreground="blue")
@@ -241,7 +301,6 @@ class RipperGUI:
             self.current_metadata = editor.result_data
             info_str = f"{self.current_metadata['artist']} - {self.current_metadata['album']} [{self.current_metadata.get('genre','')}]\n{len(self.current_metadata['tracks'])} Tracks"
             self.lbl_album_info.config(text=info_str + " (已修改)", foreground="green")
-            # [修正] 確保編輯後預覽圖不會消失
             self.update_cover_preview(self.current_metadata.get("cover_path"))
             self.log_message("✅ 資訊已更新")
 
@@ -249,7 +308,6 @@ class RipperGUI:
         drive = self.combo_drives.get(); out = self.var_output.get(); fmt = self.combo_format.get()
         self.btn_start.config(state="disabled"); self.btn_read.config(state="disabled"); self.btn_edit.config(state="disabled"); self.btn_cover.config(state="disabled")
         self.btn_stop.config(state="normal")
-        
         def task():
             try: self.engine.start_rip(drive, out, fmt, self.current_metadata)
             finally: self.root.after(0, self.reset_ui)
