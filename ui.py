@@ -117,7 +117,7 @@ class TrackEditorDialog(tk.Toplevel):
 class RipperGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Python CD Ripper Pro v2.6 (Album Art)")
+        self.root.title("Python CD Ripper Pro v1.1.1")
         self.root.geometry("750x700") # 再加寬一點
         
         self.engine = AudioRipperEngine(self.log_message)
