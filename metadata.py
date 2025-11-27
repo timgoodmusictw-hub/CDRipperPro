@@ -15,7 +15,7 @@ from utils import resource_path
 from config import DISCID_DLL, UA_APP, UA_VER, UA_CONTACT
 
 # 設定是否啟用除錯日誌
-ENABLE_DEBUG_LOG = True 
+ENABLE_DEBUG_LOG = False
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 musicbrainzngs.set_useragent(UA_APP, UA_VER, UA_CONTACT)
