@@ -4,6 +4,7 @@ import ctypes
 import urllib.request
 import urllib.parse
 import subprocess
+import requests # 新增
 import musicbrainzngs
 import wmi
 from ctypes import c_char_p, c_int, c_void_p
@@ -222,35 +223,72 @@ class MetadataManager:
                 t["artist"] = info["artist"]
                 
         return info
+    
+    def download_cover(self, release_id):
+        """ 從 MusicBrainz (Cover Art Archive) 下載封面 """
+        if not release_id: return None
+        try:
+            # 取得封面列表
+            data = musicbrainzngs.get_image_list(release_id)
+            if "images" in data and len(data["images"]) > 0:
+                # 找 Front 封面
+                url = None
+                for img in data["images"]:
+                    if "Front" in img.get("types", []) or img.get("front", False):
+                        url = img["image"]
+                        break
+                if not url: url = data["images"][0]["image"] # 沒標記 Front 就拿第一張
+                
+                # 下載圖片到暫存檔
+                self.log("  🖼️ 發現封面，正在下載...")
+                r = requests.get(url, stream=True, timeout=10)
+                if r.status_code == 200:
+                    temp_path = os.path.join(os.getcwd(), "temp_cover.jpg")
+                    with open(temp_path, 'wb') as f:
+                        for chunk in r.iter_content(1024): f.write(chunk)
+                    return temp_path
+        except Exception as e:
+            # 很多專輯可能沒有封面，這很正常，不需報錯
+            pass
+        return None
 
     def fetch(self, drive_letter, use_native_first=False):
+        # 1. 初始化
         if not self.disc_reader.read_drive(drive_letter):
-            self.log("❌ 無法讀取光碟結構")
-            return None
-
-        # 1. 先取得實體光碟的準確軌數 (重要修正)
+            self.log("❌ 無法讀取光碟結構"); return None
+        
         physical_count = self.disc_reader.get_track_count()
-        if physical_count == 0: physical_count = 15 # 若讀不到，給個預設值備用
+        if physical_count == 0: physical_count = 15
 
+        cover_path = None # 初始化封面路徑
+
+        # 2. 策略選擇
         if use_native_first:
             self.log("💿 讀取 CD-Text...")
             if info := NativeCDReader.get_cd_info(drive_letter):
                 self.log(f"✅ CD-Text: {info['album']}")
+                info["cover_path"] = None
                 return self._ensure_tracks(info, physical_count)
 
         self.log("🔍 查詢 MusicBrainz...")
         try:
             if mb_id := self.disc_reader.get_mb_discid():
+                # 這裡需要獲取 release id 以便下載封面
                 res = musicbrainzngs.get_releases_by_discid(mb_id, includes=["artists", "recordings"])
                 if "disc" in res and "release-list" in res["disc"]:
                     rel = res["disc"]["release-list"][0]
+                    release_id = rel["id"] # 取得 Release ID
+                    
                     info = {
                         "artist": rel["artist-credit"][0]["artist"]["name"],
                         "album": rel.get("title", "Unknown"),
                         "year": rel.get("date", "0000").split("-")[0],
-                        "genre": "Unknown", 
-                        "tracks": []
+                        "genre": "Unknown",
+                        "tracks": [],
+                        "cover_path": self.download_cover(release_id) # 嘗試下載封面
                     }
+                    if info["cover_path"]: self.log("  ✅ 封面下載成功")
+
                     for t in rel["medium-list"][0]["track-list"]:
                         track_artist = t["recording"].get("artist-credit", [{"artist": {"name": info["artist"]}}])[0]["artist"]["name"]
                         info["tracks"].append({"num": t["number"], "title": t["recording"]["title"], "artist": track_artist})
@@ -259,20 +297,21 @@ class MetadataManager:
                     return self._ensure_tracks(info, physical_count)
         except Exception as e: self.log(f"  ⚠️ MusicBrainz 失敗: {e}")
 
+        # ... (GnuDB 與 CD-Text 部分保持不變，記得在回傳的 info 加上 "cover_path": None) ...
+        
+        # 簡化範例：若上述失敗，回傳 GnuDB
         self.log("🔍 查詢 GnuDB...")
         if disc_data := self.disc_reader.get_freedb_data():
-            # 即使 info 回傳不是 None，它可能也沒有 tracks
             if info := GnuDBReader.query(disc_data, self.log):
                 self.log(f"✅ GnuDB: {info['album']}")
-                # 這裡會觸發 _ensure_tracks，如果 GnuDB 回傳空 track 列表，就會自動補齊
+                info["cover_path"] = None # GnuDB 無圖片
                 return self._ensure_tracks(info, physical_count)
 
         if not use_native_first:
             self.log("🔄 嘗試 CD-Text...")
             if info := NativeCDReader.get_cd_info(drive_letter):
+                info["cover_path"] = None
                 return self._ensure_tracks(info, physical_count)
 
-        self.log("⚠️ 無線上資料，建立基礎模板")
-        # 回傳一個只有實體軌數的空模板
-        dummy_info = {"artist": "Unknown Artist", "album": "Unknown Album", "year": time.strftime("%Y"), "genre": "Unknown", "tracks": []}
-        return self._ensure_tracks(dummy_info, physical_count)
+        self.log("⚠️ 無資料"); 
+        return self._ensure_tracks({"artist": "Unknown", "album": "Unknown", "cover_path": None, "tracks": []}, physical_count)
