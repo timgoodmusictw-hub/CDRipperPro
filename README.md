@@ -1,5 +1,7 @@
 # CDRipperPro - CD 轉檔工具 (CD Ripper)
 
+## 如要直接使用請到 Release 欄位下載執行檔
+
 **CDRipperPro** ，一個輕量、模組化且功能強大的 CD 音訊擷取（抓軌）工具。它結合了 MusicBrainz 與 GnuDB (FreeDB) 資料庫，能自動搜尋專輯封面與曲目資訊，並支援手動編輯每一首歌曲的詳細資料（如個別演出者、流派等）。
 
 **CDRipperPro** is a lightweight, modular, and powerful CD audio extraction tool. It integrates MusicBrainz and GnuDB (FreeDB) databases to automatically fetch album metadata and supports manual editing for individual track details (e.g., specific artists, genres).
