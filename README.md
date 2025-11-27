@@ -136,4 +136,4 @@ You must create a folder named `tools` in the root directory and place the follo
 
 -----
 
-*Created by [Your Name/Developer]*
+*Created by [tim_good_music@Threads]*
