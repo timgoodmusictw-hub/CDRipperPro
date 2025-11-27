@@ -69,6 +69,15 @@ pip install wmi musicbrainzngs mutagen
   * `config.py`: 全域設定檔。
   * `utils.py`: 通用工具函式。
 
+### ⚠️ 免責聲明 (Disclaimer)
+
+本軟體 (CDRipperPro) 僅供個人學習、研究與合法備份使用。
+
+1.  **無擔保聲明**：本軟體按「原樣 (As Is)」提供，作者不提供任何明示或暗示的保證，包括但不限於適售性或特定用途的適用性。
+2.  **硬體風險**：CD 抓軌 (Ripping) 過程可能會對光碟機造成高強度的讀取運作。**作者不對因使用本軟體而導致的任何硬體損壞（包括但不限於光碟機馬達耗損、讀取頭老化或光碟片刮傷）負責。**
+3.  **資料安全**：作者不對因軟體錯誤或操作不當導致的任何檔案遺失、資料毀損或電腦系統異常承擔責任。
+4.  **使用責任**：使用者應自行評估並承擔使用本軟體的所有風險。下載或使用本軟體即代表您同意本免責聲明。
+
 -----
 
 ## 🇺🇸 English Instructions
@@ -133,6 +142,15 @@ You must create a folder named `tools` in the root directory and place the follo
   * `engine.py`: Handles audio processing (calling `freac`/`ffmpeg`) and tag writing.
   * `config.py`: Global configuration and constants.
   * `utils.py`: Utility functions.
+
+### ⚠️ Disclaimer
+
+This software (CDRipperPro) is intended for personal learning, research, and legal backup purposes only.
+
+1.  **No Warranty**: This software is provided "AS IS", without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and non-infringement.
+2.  **Hardware Risk**: The CD ripping process involves intensive operation of your CD drive. **The author is NOT responsible for any damage to hardware (including but not limited to CD drive motor wear, laser lens degradation, or scratched discs) resulting from the use of this software.**
+3.  **Data Security**: The author shall not be liable for any data loss, file corruption, or system instability caused by software bugs or improper usage.
+4.  **Limitation of Liability**: In no event shall the author (tim_good_music) be liable for any claim, damages, or other liability, whether in an action of contract, tort, or otherwise, arising from, out of, or in connection with the software or the use or other dealings in the software.
 
 -----
 
