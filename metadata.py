@@ -14,13 +14,19 @@ from ctypes import c_char_p, c_int, c_void_p
 from utils import resource_path
 from config import DISCID_DLL, UA_APP, UA_VER, UA_CONTACT
 
+# --- [設定] 是否啟用除錯日誌 ---
+# True = 發生錯誤時寫入 debug_log.txt
+# False = 忽略錯誤 (正式發布建議設為 False)
+ENABLE_DEBUG_LOG = False
+# -----------------------------
+
 # 忽略 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 musicbrainzngs.set_useragent(UA_APP, UA_VER, UA_CONTACT)
 
 def get_base_path():
-    """ 取得執行檔所在的真實目錄 (解決打包後路徑問題) """
+    """ 取得執行檔所在的真實目錄 """
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
     else:
@@ -28,6 +34,9 @@ def get_base_path():
 
 def log_error(msg):
     """ 將錯誤寫入 debug_log.txt 以便除錯 """
+    # [修改處] 檢查開關變數
+    if not ENABLE_DEBUG_LOG: return
+
     log_path = os.path.join(get_base_path(), "debug_log.txt")
     try:
         with open(log_path, "a", encoding="utf-8") as f:
@@ -35,7 +44,7 @@ def log_error(msg):
     except: pass
 
 class DiscIDWrapper:
-    """ MusicBrainz DiscID 讀取器 (保持不變) """
+    """ MusicBrainz DiscID 讀取器 """
     def __init__(self, dll_name=DISCID_DLL):
         self.dll_path = resource_path(os.path.join("tools", dll_name))
         self.lib = None
@@ -76,44 +85,69 @@ class DiscIDWrapper:
             return {"discid": fid, "track_count": str(last - first + 1), "offsets": [str(self.lib.discid_get_track_offset(self.disc, i)) for i in range(first, last + 1)], "seconds": str(self.lib.discid_get_sectors(self.disc) // 75)}
         except: return None
 
-class GnuDBReader:
-    SERVER = "http://gnudb.gnudb.org/~cddb/cddb.cgi"
+class CDDBQueryEngine:
+    """ 通用 CDDB 查詢引擎 """
+    def __init__(self, server_url, name):
+        self.server_url = server_url
+        self.name = name
     
-    @staticmethod
-    def query(disc_data, log_func):
+    def query(self, disc_data, log_func):
         if not disc_data: return None
+        
+        # 建立 CDDB 查詢指令
         cmd_arg = f"cddb query {disc_data['discid']} {disc_data['track_count']} {' '.join(disc_data['offsets'])} {disc_data['seconds']}"
+        params = {'cmd': cmd_arg, 'hello': 'user host client 1.0', 'proto': '6'}
+        query_url = f"{self.server_url}?{urllib.parse.urlencode(params)}"
+        
         try:
-            log_func("  📡 連線 GnuDB 伺服器...")
-            with urllib.request.urlopen(f"{GnuDBReader.SERVER}?{urllib.parse.urlencode({'cmd': cmd_arg, 'hello': 'user host client 1.0', 'proto': '6'})}", timeout=10) as resp:
-                content = resp.read().decode('utf-8', errors='replace')
-            code = int(content.split()[0])
+            log_func(f"  📡 連線 {self.name}...")
+            resp = requests.get(query_url, timeout=10, verify=False)
+            content = resp.text
+            
+            parts = content.split()
+            if not parts: return None
+            
+            try:
+                code = int(parts[0])
+            except: return None
+            
+            cat, disc_id = "", ""
             
             if code == 200: 
-                cat, disc_id = content.split()[1], content.split()[2]
+                cat, disc_id = parts[1], parts[2]
             elif code in (210, 211): 
-                parts = content.strip().split('\n')
-                if len(parts) > 1:
-                    target_line = parts[1].split()
-                    cat, disc_id = target_line[0], target_line[1]
+                lines = content.strip().split('\n')
+                if len(lines) > 1:
+                    target_parts = lines[1].split()
+                    cat, disc_id = target_parts[0], target_parts[1]
                 else: return None
-            else: return None
+            else: 
+                return None
 
-            log_func(f"  📖 讀取 GnuDB: {cat}")
-            with urllib.request.urlopen(f"{GnuDBReader.SERVER}?{urllib.parse.urlencode({'cmd': f'cddb read {cat} {disc_id}', 'hello': 'u h c 1.0', 'proto': '6'})}", timeout=10) as resp:
-                raw_data = resp.read()
+            log_func(f"  📖 {self.name} 讀取: {cat}")
+            
+            # 讀取詳細資料
+            read_cmd = f"cddb read {cat} {disc_id}"
+            read_params = {'cmd': read_cmd, 'hello': 'u h c 1.0', 'proto': '6'}
+            read_url = f"{self.server_url}?{urllib.parse.urlencode(read_params)}"
+            
+            resp_read = requests.get(read_url, timeout=10, verify=False)
+            raw_data = resp_read.content 
             
             decoded_text = ""
-            for enc in ['utf-8', 'shift_jis', 'cp1252', 'iso-8859-1']:
-                try: decoded_text = raw_data.decode(enc); break
+            for enc in ['utf-8', 'shift_jis', 'cp1252', 'iso-8859-1', 'gbk']:
+                try: 
+                    decoded_text = raw_data.decode(enc)
+                    break
                 except: continue
             
-            return GnuDBReader.parse_entry(decoded_text)
+            return self.parse_entry(decoded_text)
+            
         except Exception as e:
-            log_func(f"  ❌ GnuDB 錯誤: {e}"); return None
+            log_error(f"{self.name} Query Error: {e}")
+            return None
 
-    @staticmethod
-    def parse_entry(text):
+    def parse_entry(self, text):
         info = {"artist": "Unknown", "album": "Unknown", "year": time.strftime("%Y"), "genre": "Unknown", "tracks": []}
         track_titles = {}
         for line in text.strip().split('\n'):
@@ -136,6 +170,7 @@ class GnuDBReader:
 class NativeCDReader:
     @staticmethod
     def get_cd_info(drive_letter):
+        # 維持不變
         ps = f"""
         $ErrorActionPreference='SilentlyContinue'; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8
         $wmp=New-Object -ComObject WMPlayer.OCX; $drives=$wmp.cdromCollection
@@ -183,6 +218,12 @@ class MetadataManager:
     def __init__(self, logger_func):
         self.log = logger_func
         self.disc_reader = DiscIDWrapper()
+        
+        self.cddb_sources = [
+            CDDBQueryEngine("http://gnudb.gnudb.org/~cddb/cddb.cgi", "GnuDB"),
+            CDDBQueryEngine("http://freedb.dbpoweramp.com/~cddb/cddb.cgi", "FreeDB (dbPowerAmp)"),
+            CDDBQueryEngine("http://tracktype.org/~cddb/cddb.cgi", "FreeDB (TrackType)")
+        ]
 
     def check_dependency(self): return self.disc_reader.lib is not None
     
@@ -208,18 +249,11 @@ class MetadataManager:
         return info
 
     def download_cover(self, release_id):
-        """ [修正版] 手動呼叫 API 並略過 SSL 驗證 """
         if not release_id: return None
         try:
-            # 手動構造 API 網址，繞過 musicbrainzngs 函式庫
             api_url = f"https://coverartarchive.org/release/{release_id}/"
-            
-            # 1. 取得圖片列表 (Verify=False 略過證書檢查)
             resp = requests.get(api_url, timeout=10, verify=False)
-            if resp.status_code != 200:
-                log_error(f"Cover API Failed: {resp.status_code}")
-                return None
-                
+            if resp.status_code != 200: return None
             data = resp.json()
             if "images" in data and len(data["images"]) > 0:
                 img_url = None
@@ -228,23 +262,17 @@ class MetadataManager:
                         img_url = img["image"]
                         break
                 if not img_url: img_url = data["images"][0]["image"]
-                
-                # 2. 下載圖片
-                self.log("  🖼️ 發現封面，正在下載...")
-                # 確保 HTTPS 網址也能下載
                 if img_url.startswith("http://"): img_url = img_url.replace("http://", "https://")
                 
+                self.log("  🖼️ 發現封面，正在下載...")
                 r = requests.get(img_url, stream=True, timeout=15, verify=False)
                 if r.status_code == 200:
-                    # [修正] 儲存在 exe 旁邊，而不是系統暫存區
                     temp_path = os.path.join(get_base_path(), "temp_cover.jpg")
                     with open(temp_path, 'wb') as f:
                         for chunk in r.iter_content(1024): f.write(chunk)
                     return temp_path
-                else:
-                    log_error(f"Image Download Failed: {r.status_code}")
         except Exception as e:
-            log_error(f"Download Exception: {e}")
+            log_error(f"Cover Download Exception: {e}")
         return None
 
     def fetch(self, drive_letter, use_native_first=False):
@@ -268,8 +296,6 @@ class MetadataManager:
                 if "disc" in res and "release-list" in res["disc"]:
                     rel = res["disc"]["release-list"][0]
                     release_id = rel["id"]
-                    
-                    # 呼叫修正後的下載函數
                     cover_file = self.download_cover(release_id)
                     
                     info = {
@@ -281,7 +307,6 @@ class MetadataManager:
                         "cover_path": cover_file
                     }
                     if info["cover_path"]: self.log("  ✅ 封面下載成功")
-                    else: self.log("  ⚠️ 未找到封面或下載失敗 (詳見 debug_log.txt)")
 
                     for t in rel["medium-list"][0]["track-list"]:
                         track_artist = t["recording"].get("artist-credit", [{"artist": {"name": info["artist"]}}])[0]["artist"]["name"]
@@ -291,14 +316,20 @@ class MetadataManager:
                     return self._ensure_tracks(info, physical_count)
         except Exception as e:
             self.log(f"  ⚠️ MusicBrainz 失敗: {e}")
-            log_error(f"MB Search Error: {e}")
 
-        self.log("🔍 查詢 GnuDB...")
+        self.log("🔍 查詢 CDDB (GnuDB / FreeDB)...")
         if disc_data := self.disc_reader.get_freedb_data():
-            if info := GnuDBReader.query(disc_data, self.log):
-                self.log(f"✅ GnuDB: {info['album']}")
-                info["cover_path"] = None
-                return self._ensure_tracks(info, physical_count)
+            for source in self.cddb_sources:
+                info = source.query(disc_data, self.log)
+                
+                if info:
+                    if info.get("artist") == "Unknown" and info.get("album") == "Unknown":
+                        self.log(f"  ⚠️ {source.name} 資料無效 (Unknown)，嘗試下一來源...")
+                        continue
+                        
+                    self.log(f"✅ {source.name}: {info['album']}")
+                    info["cover_path"] = None
+                    return self._ensure_tracks(info, physical_count)
 
         if not use_native_first:
             self.log("🔄 嘗試 CD-Text...")

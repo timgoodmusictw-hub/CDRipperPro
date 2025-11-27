@@ -3,7 +3,7 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 import threading
 import time
 import os
-from PIL import Image, ImageTk # 新增 PIL
+from PIL import Image, ImageTk
 from config import DEFAULT_OUTPUT_DIR, DISCID_DLL
 from engine import AudioRipperEngine
 from metadata import MetadataManager
@@ -43,20 +43,15 @@ class TrackEditorDialog(tk.Toplevel):
         frame_list = ttk.LabelFrame(self, text="曲目列表 (每首歌可獨立設定演出者)", padding=5)
         frame_list.pack(fill="both", expand=True, padx=10, pady=5)
 
-        # --- [修改重點] 建立固定的標題列 (Header) ---
-        # 為了讓標題不隨滾輪滑動，我們將它放在 canvas 之外，獨立的一個 Frame
+        # 建立固定的標題列 (Header)
         header_frame = ttk.Frame(frame_list)
         header_frame.pack(side="top", fill="x", padx=0, pady=2)
 
-        # 使用 Grid 排版來模擬下方列表的寬度
-        # 欄位 0: 序號 (#)
         ttk.Label(header_frame, text="#", width=4, anchor="center").grid(row=0, column=0, padx=5, sticky="w")
-        # 欄位 1: 標題 (Title) - 設定寬度以對齊下方的 Entry(width=40)
         ttk.Label(header_frame, text="曲目名稱 (Title)", width=38, anchor="w").grid(row=0, column=1, padx=5, sticky="w")
-        # 欄位 2: 演出者 (Artist) - 設定寬度以對齊下方的 Entry(width=30)
         ttk.Label(header_frame, text="個別演出者 (Artist)", width=28, anchor="w").grid(row=0, column=2, padx=5, sticky="w")
 
-        # --- 可捲動區域 (Canvas) ---
+        # 可捲動區域
         canvas = tk.Canvas(frame_list)
         scrollbar = ttk.Scrollbar(frame_list, orient="vertical", command=canvas.yview)
         self.scrollable_frame = ttk.Frame(canvas)
@@ -65,65 +60,63 @@ class TrackEditorDialog(tk.Toplevel):
         canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
 
-        # 這裡的 Pack 順序：標題列已經在最上面了，接著是 Canvas 填滿剩下空間
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # 綁定滾輪
         def _on_mousewheel(event): canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
-        # --- 產生內容列表 ---
         self.track_vars = []
         for i, track in enumerate(self.metadata["tracks"]):
-            row = i # 從第 0 列開始 (因為標題已經移到外面了)
-            
-            # 序號
+            row = i
             ttk.Label(self.scrollable_frame, text=track['num'], width=4, anchor="center").grid(row=row, column=0, padx=5, pady=2)
-            
-            # 標題輸入框 (Width 40)
             t_title = tk.StringVar(value=track['title'])
             ttk.Entry(self.scrollable_frame, textvariable=t_title, width=40).grid(row=row, column=1, padx=5, pady=2)
-            
-            # 演出者輸入框 (Width 30)
             t_artist = tk.StringVar(value=track.get('artist', self.metadata.get('artist', '')))
             ttk.Entry(self.scrollable_frame, textvariable=t_artist, width=30).grid(row=row, column=2, padx=5, pady=2)
-            
             self.track_vars.append((t_title, t_artist))
 
-        # 3. 底部按鈕
+        # 3. 按鈕
         frame_btn = ttk.Frame(self, padding=10)
         frame_btn.pack(fill="x")
         ttk.Button(frame_btn, text="儲存變更", command=self.on_save).pack(side="right", padx=5)
         ttk.Button(frame_btn, text="取消", command=self.destroy).pack(side="right", padx=5)
 
     def on_save(self):
-        new_meta = {
-            "artist": self.vars["artist"].get(),
-            "album": self.vars["album"].get(),
-            "year": self.vars["year"].get(),
-            "genre": self.vars["genre"].get(),
-            "tracks": []
-        }
+        # [關鍵修正] 使用 copy() 保留原始資料 (包含 cover_path)，而不是建立新字典
+        new_meta = self.metadata.copy()
+        
+        # 更新全域資訊
+        new_meta["artist"] = self.vars["artist"].get()
+        new_meta["album"] = self.vars["album"].get()
+        new_meta["year"] = self.vars["year"].get()
+        new_meta["genre"] = self.vars["genre"].get()
+        
+        # 重建曲目列表
+        new_tracks = []
         for i, (v_title, v_artist) in enumerate(self.track_vars):
-            new_meta["tracks"].append({
-                "num": self.metadata["tracks"][i]["num"],
-                "title": v_title.get(),
-                "artist": v_artist.get()
-            })
+            # 保留原始曲目的其他潛在資訊，只更新標題與演出者
+            original_track = self.metadata["tracks"][i]
+            updated_track = original_track.copy()
+            updated_track["title"] = v_title.get()
+            updated_track["artist"] = v_artist.get()
+            new_tracks.append(updated_track)
+            
+        new_meta["tracks"] = new_tracks
+        
         self.result_data = new_meta
         self.destroy()
 
 class RipperGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Python CD Ripper Pro v1.1.1")
-        self.root.geometry("750x700") # 再加寬一點
+        self.root.title("Python CD Ripper Pro v2.6 (Album Art)")
+        self.root.geometry("750x700")
         
         self.engine = AudioRipperEngine(self.log_message)
         self.meta_mgr = MetadataManager(self.log_message)
         self.current_metadata = None
-        self.cover_image_ref = None # 防止圖片被垃圾回收
+        self.cover_image_ref = None
 
         missing = self.engine.check_tools()
         if not self.meta_mgr.check_dependency(): missing.append(DISCID_DLL)
@@ -133,46 +126,39 @@ class RipperGUI:
         self.refresh_drives()
 
     def setup_ui(self):
-        # 1. 設定區 (不變)
         frame_settings = ttk.LabelFrame(self.root, text="設定", padding=10)
         frame_settings.pack(fill="x", padx=10, pady=5)
-        # ... (設定區的程式碼保持原本的樣子) ...
+
         ttk.Label(frame_settings, text="光碟機:").grid(row=0, column=0, sticky="w")
         self.combo_drives = ttk.Combobox(frame_settings, state="readonly", width=8); self.combo_drives.grid(row=0, column=1, padx=5)
         ttk.Button(frame_settings, text="重整", command=self.refresh_drives).grid(row=0, column=2)
+
         ttk.Label(frame_settings, text="格式:").grid(row=0, column=3, sticky="e", padx=10)
         self.combo_format = ttk.Combobox(frame_settings, state="readonly", width=8, values=["m4a", "flac", "mp3"]); self.combo_format.current(0); self.combo_format.grid(row=0, column=4)
+
         self.var_use_cdtext = tk.BooleanVar(value=False)
         ttk.Checkbutton(frame_settings, text="優先使用本機 CD-Text", variable=self.var_use_cdtext).grid(row=1, column=0, columnspan=3, sticky="w", pady=5)
+
         ttk.Label(frame_settings, text="輸出目錄:").grid(row=2, column=0, sticky="w")
         self.var_output = tk.StringVar(value=DEFAULT_OUTPUT_DIR)
         ttk.Entry(frame_settings, textvariable=self.var_output, width=45).grid(row=2, column=1, columnspan=3, sticky="w", padx=5)
         ttk.Button(frame_settings, text="瀏覽...", command=self.browse_folder).grid(row=2, column=4)
 
-        # --- [修改重點] 2. 資訊與封面區 ---
         frame_mid = ttk.Frame(self.root)
         frame_mid.pack(fill="x", padx=10, pady=5)
 
-        # 左側：專輯文字資訊
         frame_info = ttk.LabelFrame(frame_mid, text="專輯資訊", padding=10)
         frame_info.pack(side="left", fill="both", expand=True, padx=(0, 5))
-        
         self.lbl_album_info = ttk.Label(frame_info, text="請先搜尋資訊...", font=("Microsoft JhengHei", 10, "bold"), wraplength=400)
         self.lbl_album_info.pack(anchor="w", pady=10)
 
-        # 右側：封面預覽與按鈕
         frame_cover = ttk.LabelFrame(frame_mid, text="封面預覽", padding=5)
         frame_cover.pack(side="right", padx=(5, 0))
-        
-        # 圖片 Label (預設顯示文字)
         self.lbl_cover = ttk.Label(frame_cover, text="無圖片", width=15, anchor="center")
         self.lbl_cover.pack(pady=5)
-        
-        # 手動選擇按鈕
         self.btn_cover = ttk.Button(frame_cover, text="選擇封面...", command=self.on_select_cover, state="disabled")
         self.btn_cover.pack(fill="x")
 
-        # 3. 操作按鈕 (不變)
         frame_actions = ttk.Frame(self.root, padding=10)
         frame_actions.pack(fill="x", padx=10)
         self.btn_read = ttk.Button(frame_actions, text="1. 搜尋資訊", command=self.on_read_cd); self.btn_read.pack(side="left", padx=5)
@@ -180,7 +166,6 @@ class RipperGUI:
         self.btn_start = ttk.Button(frame_actions, text="3. 開始轉檔", command=self.on_start_rip, state="disabled"); self.btn_start.pack(side="left", padx=5)
         self.btn_stop = ttk.Button(frame_actions, text="停止", command=self.on_stop, state="disabled"); self.btn_stop.pack(side="right", padx=5)
 
-        # 底部 Log (不變)
         lbl_credit = ttk.Label(self.root, text="Created by tim_good_music", font=("Arial", 8), foreground="gray"); lbl_credit.pack(side="bottom", pady=2)
         self.lbl_status = ttk.Label(self.root, text="就緒", relief="sunken", anchor="w"); self.lbl_status.pack(fill="x", side="bottom")
         self.txt_log = scrolledtext.ScrolledText(self.root, height=10, state="disabled", font=("Consolas", 9)); self.txt_log.pack(fill="both", expand=True, padx=10, pady=5)
@@ -201,21 +186,19 @@ class RipperGUI:
         if d := filedialog.askdirectory(): self.var_output.set(d)
 
     def update_cover_preview(self, img_path):
-        """ 更新介面上的封面預覽 """
         try:
             if img_path and os.path.exists(img_path):
                 pil_img = Image.open(img_path)
-                pil_img.thumbnail((120, 120)) # 縮圖
+                pil_img.thumbnail((120, 120))
                 tk_img = ImageTk.PhotoImage(pil_img)
                 self.lbl_cover.config(image=tk_img, text="")
-                self.cover_image_ref = tk_img # 重要：保留引用
+                self.cover_image_ref = tk_img
             else:
                 self.lbl_cover.config(image="", text="無圖片")
-        except Exception as e:
+        except:
             self.lbl_cover.config(image="", text="錯誤")
 
     def on_select_cover(self):
-        """ 手動選擇封面 """
         file_path = filedialog.askopenfilename(filetypes=[("Images", "*.jpg;*.jpeg;*.png")])
         if file_path:
             if self.current_metadata:
@@ -231,7 +214,6 @@ class RipperGUI:
         def task():
             self.log_message(f"讀取 {drive} ...")
             meta = self.meta_mgr.fetch(drive, self.var_use_cdtext.get())
-            # 若無資料建立模板
             if not meta:
                 meta = {
                     "artist": "Unknown Artist", "album": "Unknown Album", "year": time.strftime("%Y"), "genre": "Pop", "cover_path": None,
@@ -247,9 +229,8 @@ class RipperGUI:
 
     def update_ui_after_read(self, info_text, cover_path):
         self.lbl_album_info.config(text=info_text, foreground="blue")
-        self.update_cover_preview(cover_path) # 顯示封面
-        self.btn_edit.config(state="normal"); self.btn_start.config(state="normal")
-        self.btn_cover.config(state="normal") # 啟用手動選擇按鈕
+        self.update_cover_preview(cover_path)
+        self.btn_edit.config(state="normal"); self.btn_start.config(state="normal"); self.btn_cover.config(state="normal")
 
     def on_edit_meta(self):
         if not self.current_metadata: return
@@ -258,13 +239,15 @@ class RipperGUI:
         
         if editor.result_data:
             self.current_metadata = editor.result_data
-            info_str = f"{self.current_metadata['artist']} - {self.current_metadata['album']} [{self.current_metadata.get('genre','')}]"
+            info_str = f"{self.current_metadata['artist']} - {self.current_metadata['album']} [{self.current_metadata.get('genre','')}]\n{len(self.current_metadata['tracks'])} Tracks"
             self.lbl_album_info.config(text=info_str + " (已修改)", foreground="green")
+            # [修正] 確保編輯後預覽圖不會消失
+            self.update_cover_preview(self.current_metadata.get("cover_path"))
             self.log_message("✅ 資訊已更新")
 
     def on_start_rip(self):
         drive = self.combo_drives.get(); out = self.var_output.get(); fmt = self.combo_format.get()
-        self.btn_start.config(state="disabled"); self.btn_read.config(state="disabled"); self.btn_edit.config(state="disabled")
+        self.btn_start.config(state="disabled"); self.btn_read.config(state="disabled"); self.btn_edit.config(state="disabled"); self.btn_cover.config(state="disabled")
         self.btn_stop.config(state="normal")
         
         def task():
@@ -274,5 +257,5 @@ class RipperGUI:
 
     def on_stop(self): self.engine.stop_flag = True
     def reset_ui(self):
-        self.btn_read.config(state="normal"); self.btn_start.config(state="normal"); self.btn_edit.config(state="normal")
+        self.btn_read.config(state="normal"); self.btn_start.config(state="normal"); self.btn_edit.config(state="normal"); self.btn_cover.config(state="normal")
         self.btn_stop.config(state="disabled"); self.log_message("--- 結束 ---")
