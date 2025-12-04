@@ -1,4 +1,4 @@
-# CDRipperPro - CD 轉檔工具 (CD Ripper)
+# CDRipperPro - Windows 專用 CD 轉檔工具 (CD Ripper for Windows)
 
 ## 如要直接使用請到 Release 欄位下載執行檔
 
